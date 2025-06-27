@@ -22,7 +22,7 @@ class OrderBook:
     def update_from_price_row(self, row):
         self.buy_orders.clear()
         self.sell_orders.clear()
-        
+
         for i in range(1, 4):
             bp = int(row[f"bid_price_{i}"]) if row[f"bid_price_{i}"] else None
             bv = int(row[f"bid_volume_{i}"]) if row[f"bid_volume_{i}"] else 0
@@ -36,13 +36,12 @@ class OrderBook:
 
 class PositionTracker:
     """Tracks realized and unrealized PnL using FIFO accounting"""
-    
     def __init__(self):
         self.position = 0
         self.realized_pnl = 0.0
         self.long_queue = []  # [(quantity, price), ...] for long positions
         self.short_queue = []  # [(quantity, price), ...] for short positions
-
+        
     def add_trade(self, quantity, price):
         """Add a trade and calculate realized PnL using FIFO"""
         if quantity > 0:  # Buy trade
@@ -51,7 +50,7 @@ class PositionTracker:
             self._process_sell(abs(quantity), price)
         
         self.position += quantity
-
+    
     def _process_buy(self, quantity, price):
         """Process a buy trade"""
         remaining_qty = quantity
@@ -59,6 +58,7 @@ class PositionTracker:
         # First, close any short positions (realize profit/loss)
         while remaining_qty > 0 and self.short_queue:
             short_qty, short_price = self.short_queue[0]
+            
             if remaining_qty >= short_qty:
                 # Close entire short position
                 self.realized_pnl += short_qty * (short_price - price)
@@ -73,7 +73,7 @@ class PositionTracker:
         # Add remaining quantity as new long position
         if remaining_qty > 0:
             self.long_queue.append((remaining_qty, price))
-
+    
     def _process_sell(self, quantity, price):
         """Process a sell trade"""
         remaining_qty = quantity
@@ -81,6 +81,7 @@ class PositionTracker:
         # First, close any long positions (realize profit/loss)
         while remaining_qty > 0 and self.long_queue:
             long_qty, long_price = self.long_queue[0]
+            
             if remaining_qty >= long_qty:
                 # Close entire long position
                 self.realized_pnl += long_qty * (price - long_price)
@@ -95,7 +96,7 @@ class PositionTracker:
         # Add remaining quantity as new short position
         if remaining_qty > 0:
             self.short_queue.append((remaining_qty, price))
-
+    
     def get_unrealized_pnl(self, current_price):
         """Calculate unrealized PnL at current market price"""
         unrealized = 0.0
@@ -109,7 +110,7 @@ class PositionTracker:
             unrealized += qty * (entry_price - current_price)
         
         return unrealized
-
+    
     def get_average_cost(self):
         """Get average cost/price of current position"""
         if self.position == 0:
@@ -128,148 +129,96 @@ class PositionTracker:
         
         return total_cost / total_qty if total_qty > 0 else 0.0
 
-class MultiProductBacktester:
+class Backtester:
     POSITION_LIMIT = 50
 
-    def __init__(self, product_data_paths: Dict[str, Dict[str, str]], trader):
-        """
-        Initialize backtester for multiple products
-        
-        Args:
-            product_data_paths: Dict of {product_name: {'price_csv': path, 'trades_csv': path}}
-            trader: Trading strategy instance
-        """
-        self.product_data_paths = product_data_paths
+    def __init__(self, price_csv_path, trades_csv_path, trader):
+        self.price_csv_path = price_csv_path
+        self.trades_csv_path = trades_csv_path
         self.trader = trader
-        self.products = list(product_data_paths.keys())
-        
-        # Per-product data storage
-        self.prices = {}  # {product: {timestamp: price_row_dict}}
-        self.trades = {}  # {product: {timestamp: [Trade, ...]}}
-        self.orderbooks = {}  # {product: OrderBook}
-        self.position_trackers = {}  # {product: PositionTracker}
-        
-        # Per-product legacy tracking (for backward compatibility)
-        self.positions = {}  # {product: position}
-        self.pnls = {}  # {product: pnl}
-        
-        # Per-product history tracking
-        self.position_histories = {}  # {product: [positions]}
-        self.pnl_histories = {}  # {product: [pnls]}
-        self.realized_pnl_histories = {}  # {product: [realized_pnls]}
-        self.unrealized_pnl_histories = {}  # {product: [unrealized_pnls]}
-        self.total_pnl_histories = {}  # {product: [total_pnls]}
-        self.mid_price_histories = {}  # {product: [mid_prices]}
-        
-        # Overall tracking
+
+        self.prices = {}  # timestamp -> price row dict
+        self.trades = {}  # timestamp -> list of Trade
+
+        # Legacy tracking (for backward compatibility)
+        self.position = 0
+        self.pnl = 0
+
+        # New enhanced tracking
+        self.position_tracker = PositionTracker()
+        self.orderbook = OrderBook()
+
+        # For tracking history for plotting
+        self.position_history = []
+        self.pnl_history = []
+        self.realized_pnl_history = []
+        self.unrealized_pnl_history = []
+        self.total_pnl_history = []
+        self.mid_price_history = []
         self.timestamps = []
-        self.overall_pnl_history = []
-        self.overall_realized_pnl_history = []
-        self.overall_unrealized_pnl_history = []
-        
-        # Initialize per-product structures
-        for product in self.products:
-            self.prices[product] = {}
-            self.trades[product] = {}
-            self.orderbooks[product] = OrderBook()
-            self.position_trackers[product] = PositionTracker()
-            self.positions[product] = 0
-            self.pnls[product] = 0
-            self.position_histories[product] = []
-            self.pnl_histories[product] = []
-            self.realized_pnl_histories[product] = []
-            self.unrealized_pnl_histories[product] = []
-            self.total_pnl_histories[product] = []
-            self.mid_price_histories[product] = []
 
     def load_data(self):
-        """Load price and trades data for all products"""
-        for product in self.products:
-            price_path = self.product_data_paths[product]['price_csv']
-            trades_path = self.product_data_paths[product]['trades_csv']
-            
-            # Load price data
-            with open(price_path, newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    ts = int(row['timestamp'])
-                    self.prices[product][ts] = row
+        # Load price data
+        with open(self.price_csv_path, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                ts = int(row['timestamp'])
+                self.prices[ts] = row
 
-            # Load trades data
-            with open(trades_path, newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    ts = int(row['timestamp'])
-                    trade = Trade(ts, int(row['price']), int(row['quantity']))
-                    self.trades[product].setdefault(ts, []).append(trade)
+        # Load trades data
+        with open(self.trades_csv_path, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                ts = int(row['timestamp'])
+                trade = Trade(ts, int(row['price']), int(row['quantity']))
+                self.trades.setdefault(ts, []).append(trade)
 
-    def get_mid_price(self, product):
-        """Calculate current mid price from orderbook for specific product"""
-        orderbook = self.orderbooks[product]
-        if not orderbook.buy_orders or not orderbook.sell_orders:
+    def get_mid_price(self):
+        """Calculate current mid price from orderbook"""
+        if not self.orderbook.buy_orders or not self.orderbook.sell_orders:
             return 10000  # fallback price
-
-        best_bid = max(orderbook.buy_orders.keys())
-        best_ask = min(orderbook.sell_orders.keys())
+        
+        best_bid = max(self.orderbook.buy_orders.keys())
+        best_ask = min(self.orderbook.sell_orders.keys())
         return (best_bid + best_ask) / 2
 
-    def match_orders(self, orders: List[Order], timestamp):
-        """Match orders for all products at given timestamp"""
-        # Group orders by product
-        orders_by_product = {}
-        for order in orders:
-            orders_by_product.setdefault(order.symbol, []).append(order)
-        
-        # Process orders for each product
-        for product, product_orders in orders_by_product.items():
-            if product not in self.products:
-                continue
-                
-            market_trades = self.trades[product].get(timestamp, [])
-            self._match_product_orders(product, product_orders, market_trades)
-
-    def _match_product_orders(self, product, orders: List[Order], market_trades: List[Trade]):
-        """Match orders for a specific product"""
-        orderbook = self.orderbooks[product]
-        position_tracker = self.position_trackers[product]
-        
+    def match_orders(self, orders: List[Order], market_trades: List[Trade]):
         for order in orders:
             qty_to_fill = abs(order.quantity)
             filled = 0
-
+            
             # Enforce position limits
-            current_position = self.positions[product]
             if order.quantity > 0:
-                max_allowed = self.POSITION_LIMIT - current_position
+                max_allowed = self.POSITION_LIMIT - self.position
                 if max_allowed <= 0:
                     continue
                 qty_to_fill = min(qty_to_fill, max_allowed)
             else:
-                max_allowed = current_position + self.POSITION_LIMIT
+                max_allowed = self.position + self.POSITION_LIMIT
                 if max_allowed <= 0:
                     continue
                 qty_to_fill = min(qty_to_fill, max_allowed)
 
             if order.quantity > 0:
                 # Buy order matching sell orders
-                sell_prices = sorted(p for p in orderbook.sell_orders if p <= order.price)
+                sell_prices = sorted(p for p in self.orderbook.sell_orders if p <= order.price)
                 for sp in sell_prices:
-                    avail = orderbook.sell_orders[sp]
+                    avail = self.orderbook.sell_orders[sp]
                     fill = min(qty_to_fill - filled, avail)
                     if fill <= 0:
                         continue
-
+                    
                     # Update legacy tracking
                     filled += fill
-                    self.positions[product] += fill
-                    self.pnls[product] -= fill * sp
-
+                    self.position += fill
+                    self.pnl -= fill * sp
+                    
                     # Update enhanced tracking
-                    position_tracker.add_trade(fill, sp)
-                    orderbook.sell_orders[sp] -= fill
-                    if orderbook.sell_orders[sp] == 0:
-                        del orderbook.sell_orders[sp]
-
+                    self.position_tracker.add_trade(fill, sp)
+                    
+                    self.orderbook.sell_orders[sp] -= fill
+                    if self.orderbook.sell_orders[sp] == 0:
+                        del self.orderbook.sell_orders[sp]
                     if filled == qty_to_fill:
                         break
 
@@ -280,38 +229,38 @@ class MultiProductBacktester:
                         
                         # Update legacy tracking
                         filled += fill
-                        self.positions[product] += fill
-                        self.pnls[product] -= fill * trade.price
-
+                        self.position += fill
+                        self.pnl -= fill * trade.price
+                        
                         # Update enhanced tracking
-                        position_tracker.add_trade(fill, trade.price)
+                        self.position_tracker.add_trade(fill, trade.price)
+                        
                         trade.quantity -= fill
                         if trade.quantity == 0:
                             market_trades.remove(trade)
-
                         if filled == qty_to_fill:
                             break
 
             else:
                 # Sell order matching buy orders
-                buy_prices = sorted((p for p in orderbook.buy_orders if p >= order.price), reverse=True)
+                buy_prices = sorted((p for p in self.orderbook.buy_orders if p >= order.price), reverse=True)
                 for bp in buy_prices:
-                    avail = orderbook.buy_orders[bp]
+                    avail = self.orderbook.buy_orders[bp]
                     fill = min(qty_to_fill - filled, avail)
                     if fill <= 0:
                         continue
-
+                    
                     # Update legacy tracking
                     filled += fill
-                    self.positions[product] -= fill
-                    self.pnls[product] += fill * bp
-
+                    self.position -= fill
+                    self.pnl += fill * bp
+                    
                     # Update enhanced tracking
-                    position_tracker.add_trade(-fill, bp)
-                    orderbook.buy_orders[bp] -= fill
-                    if orderbook.buy_orders[bp] == 0:
-                        del orderbook.buy_orders[bp]
-
+                    self.position_tracker.add_trade(-fill, bp)
+                    
+                    self.orderbook.buy_orders[bp] -= fill
+                    if self.orderbook.buy_orders[bp] == 0:
+                        del self.orderbook.buy_orders[bp]
                     if filled == qty_to_fill:
                         break
 
@@ -322,246 +271,99 @@ class MultiProductBacktester:
                         
                         # Update legacy tracking
                         filled += fill
-                        self.positions[product] -= fill
-                        self.pnls[product] += fill * trade.price
-
+                        self.position -= fill
+                        self.pnl += fill * trade.price
+                        
                         # Update enhanced tracking
-                        position_tracker.add_trade(-fill, trade.price)
+                        self.position_tracker.add_trade(-fill, trade.price)
+                        
                         trade.quantity -= fill
                         if trade.quantity == 0:
                             market_trades.remove(trade)
-
                         if filled == qty_to_fill:
                             break
 
     def run(self):
-        """Run the backtest simulation"""
         self.load_data()
-        
-        # Get all unique timestamps across all products
-        all_timestamps = set()
-        for product in self.products:
-            all_timestamps.update(self.prices[product].keys())
-        
-        timestamps = sorted(all_timestamps)
-        self.timestamps = timestamps
+        timestamps = sorted(self.prices.keys())
 
         for ts in timestamps:
-            # Update orderbooks for all products
-            for product in self.products:
-                if ts in self.prices[product]:
-                    self.orderbooks[product].update_from_price_row(self.prices[product][ts])
+            self.orderbook.update_from_price_row(self.prices[ts])
+            market_trades = self.trades.get(ts, [])
 
-            # Create state object with all orderbooks
             state = type("State", (), {})()
             state.timestamp = ts
-            state.order_depth = {product: self.orderbooks[product] for product in self.products}
-            state.positions = self.positions
+            state.order_depth = self.orderbook
+            orders_dict = self.trader.run(state, self.position)
+            orders = orders_dict.get("PRODUCT", [])
 
-            # Get orders from trader
-            orders_dict = self.trader.run(state)
+            self.match_orders(orders, market_trades)
+
+            # Calculate current mid price and unrealized PnL
+            mid_price = self.get_mid_price()
+            realized_pnl = self.position_tracker.realized_pnl
+            unrealized_pnl = self.position_tracker.get_unrealized_pnl(mid_price)
+            total_pnl = realized_pnl + unrealized_pnl
+
+            # Track history for plotting
+            self.timestamps.append(ts)
+            self.position_history.append(self.position)
+            self.pnl_history.append(self.pnl)  # Legacy cash-flow PnL
+            self.realized_pnl_history.append(realized_pnl)
+            self.unrealized_pnl_history.append(unrealized_pnl)
+            self.total_pnl_history.append(total_pnl)
+            self.mid_price_history.append(mid_price)
+
+        # Auto-clear position at last timestamp (simplified version)
+        if self.position != 0:
+            print(f"Auto-clearing position of {self.position} at last timestamp {timestamps[-1]}")
+            last_mid_price = self.get_mid_price()
             
-            # Flatten orders from all products
-            all_orders = []
-            for product_orders in orders_dict.values():
-                all_orders.extend(product_orders)
-
-            # Match orders
-            self.match_orders(all_orders, ts)
-
-            # Calculate and track metrics for each product
-            overall_realized_pnl = 0
-            overall_unrealized_pnl = 0
-            overall_total_pnl = 0
+            # Clear position at mid price
+            self.position_tracker.add_trade(-self.position, last_mid_price)
+            self.pnl += self.position * last_mid_price if self.position < 0 else -self.position * last_mid_price
+            self.position = 0
             
-            for product in self.products:
-                mid_price = self.get_mid_price(product)
-                realized_pnl = self.position_trackers[product].realized_pnl
-                unrealized_pnl = self.position_trackers[product].get_unrealized_pnl(mid_price)
-                total_pnl = realized_pnl + unrealized_pnl
-
-                # Track per-product history
-                self.position_histories[product].append(self.positions[product])
-                self.pnl_histories[product].append(self.pnls[product])
-                self.realized_pnl_histories[product].append(realized_pnl)
-                self.unrealized_pnl_histories[product].append(unrealized_pnl)
-                self.total_pnl_histories[product].append(total_pnl)
-                self.mid_price_histories[product].append(mid_price)
-                
-                # Accumulate overall metrics
-                overall_realized_pnl += realized_pnl
-                overall_unrealized_pnl += unrealized_pnl
-                overall_total_pnl += total_pnl
-
-            # Track overall history
-            self.overall_realized_pnl_history.append(overall_realized_pnl)
-            self.overall_unrealized_pnl_history.append(overall_unrealized_pnl)
-            self.overall_pnl_history.append(overall_total_pnl)
-
-        # Auto-clear positions at last timestamp
-        if timestamps:
-            last_ts = timestamps[-1]
-            print(f"Auto-clearing all positions at last timestamp {last_ts}")
+            # Update final history
+            final_realized_pnl = self.position_tracker.realized_pnl
+            final_unrealized_pnl = self.position_tracker.get_unrealized_pnl(last_mid_price)
             
-            for product in self.products:
-                if self.positions[product] != 0:
-                    print(f"Auto-clearing {product} position of {self.positions[product]}")
-                    last_mid_price = self.get_mid_price(product)
-                    
-                    # Clear position at mid price
-                    self.position_trackers[product].add_trade(-self.positions[product], last_mid_price)
-                    self.pnls[product] += (self.positions[product] * last_mid_price 
-                                         if self.positions[product] < 0 
-                                         else -self.positions[product] * last_mid_price)
-                    self.positions[product] = 0
+            self.timestamps.append(timestamps[-1] + 1)
+            self.position_history.append(0)
+            self.pnl_history.append(self.pnl)
+            self.realized_pnl_history.append(final_realized_pnl)
+            self.unrealized_pnl_history.append(final_unrealized_pnl)
+            self.total_pnl_history.append(final_realized_pnl + final_unrealized_pnl)
+            self.mid_price_history.append(last_mid_price)
 
-            # Update final history after clearing
-            overall_final_realized = sum(tracker.realized_pnl for tracker in self.position_trackers.values())
-            overall_final_unrealized = sum(tracker.get_unrealized_pnl(self.get_mid_price(product)) 
-                                         for product, tracker in self.position_trackers.items())
-            
-            self.timestamps.append(last_ts + 1)
-            self.overall_realized_pnl_history.append(overall_final_realized)
-            self.overall_unrealized_pnl_history.append(overall_final_unrealized)
-            self.overall_pnl_history.append(overall_final_realized + overall_final_unrealized)
-            
-            for product in self.products:
-                self.position_histories[product].append(0)
-                self.pnl_histories[product].append(self.pnls[product])
-                self.realized_pnl_histories[product].append(self.position_trackers[product].realized_pnl)
-                self.unrealized_pnl_histories[product].append(
-                    self.position_trackers[product].get_unrealized_pnl(self.get_mid_price(product))
-                )
-                self.total_pnl_histories[product].append(
-                    self.position_trackers[product].realized_pnl + 
-                    self.position_trackers[product].get_unrealized_pnl(self.get_mid_price(product))
-                )
-                self.mid_price_histories[product].append(self.get_mid_price(product))
-
-        self._print_final_summary()
-
-    def _print_final_summary(self):
-        """Print comprehensive final summary"""
-        print("\n" + "="*80)
-        print("MULTI-PRODUCT BACKTEST SUMMARY")
-        print("="*80)
-        
-        overall_realized = self.overall_realized_pnl_history[-1] if self.overall_realized_pnl_history else 0
-        overall_total = self.overall_pnl_history[-1] if self.overall_pnl_history else 0
-        
-        print(f"\n OVERALL PERFORMANCE:")
-        print(f"├── Total Realized PnL: ${overall_realized:.2f}")
-        print(f"└── Total PnL: ${overall_total:.2f}")
-        
-        print(f"\n PER-PRODUCT BREAKDOWN:")
-        for product in self.products:
-            final_pos = self.positions[product]
-            final_realized = (self.realized_pnl_histories[product][-1] 
-                            if self.realized_pnl_histories[product] else 0)
-            final_total = (self.total_pnl_histories[product][-1] 
-                         if self.total_pnl_histories[product] else 0)
-            
-            print(f"├── {product}:")
-            print(f"│   ├── Final Position: {final_pos}")
-            print(f"│   ├── Realized PnL: ${final_realized:.2f}")
-            print(f"│   └── Total PnL: ${final_total:.2f}")
+        print(f"Final position after autoclear: {self.position}")
+        print(f"Final Legacy PnL: {self.pnl}")
+        print(f"Final Realized PnL: {self.position_tracker.realized_pnl:.2f}")
+        print(f"Final Unrealized PnL: {self.position_tracker.get_unrealized_pnl(self.get_mid_price()):.2f}")
+        print(f"Final Total PnL: {self.position_tracker.realized_pnl + self.position_tracker.get_unrealized_pnl(self.get_mid_price()):.2f}")
 
     def get_detailed_summary(self):
-        """Get detailed trading summary with per-product breakdown"""
+        """Get detailed trading summary with realized/unrealized breakdown"""
         if not self.timestamps:
             return "No trading data available"
-
-        summary = "\n" + "="*80 + "\n"
-        summary += "MULTI-PRODUCT BACKTEST DETAILED SUMMARY\n"
-        summary += "="*80 + "\n"
-
-        # Overall metrics
-        overall_realized = self.overall_realized_pnl_history[-1] if self.overall_realized_pnl_history else 0
-        overall_total = self.overall_pnl_history[-1] if self.overall_pnl_history else 0
         
-        summary += f"\n OVERALL PERFORMANCE:\n"
-        summary += f"├── Total Realized PnL: ${overall_realized:.2f}\n"
-        summary += f"├── Total PnL: ${overall_total:.2f}\n"
-        summary += f"└── Products Traded: {len(self.products)}\n"
-
-        # Per-product breakdown
-        summary += f"\n DETAILED PER-PRODUCT ANALYSIS:\n"
-        for i, product in enumerate(self.products):
-            final_pos = self.positions[product]
-            final_realized = (self.realized_pnl_histories[product][-1] 
-                            if self.realized_pnl_histories[product] else 0)
-            final_total = (self.total_pnl_histories[product][-1] 
-                         if self.total_pnl_histories[product] else 0)
-            max_realized = (max(self.realized_pnl_histories[product]) 
-                          if self.realized_pnl_histories[product] else 0)
-            min_realized = (min(self.realized_pnl_histories[product]) 
-                          if self.realized_pnl_histories[product] else 0)
-            
-            connector = "├──" if i < len(self.products) - 1 else "└──"
-            sub_connector = "│" if i < len(self.products) - 1 else " "
-            
-            summary += f"{connector} {product}:\n"
-            summary += f"{sub_connector}   ├── Final Position: {final_pos}\n"
-            summary += f"{sub_connector}   ├── Realized PnL: ${final_realized:.2f}\n"
-            summary += f"{sub_connector}   ├── Total PnL: ${final_total:.2f}\n"
-            summary += f"{sub_connector}   ├── Peak Realized PnL: ${max_realized:.2f}\n"
-            summary += f"{sub_connector}   └── Lowest Realized PnL: ${min_realized:.2f}\n"
-
-        return summary
-
-# Backward compatibility class
-class Backtester(MultiProductBacktester):
-    """Single-product backtester for backward compatibility"""
-    
-    def __init__(self, price_csv_path, trades_csv_path, trader):
-        product_data = {
-            "PRODUCT": {
-                "price_csv": price_csv_path,
-                "trades_csv": trades_csv_path
-            }
-        }
-        super().__init__(product_data, trader)
+        final_realized = self.realized_pnl_history[-1] if self.realized_pnl_history else 0
+        final_unrealized = self.unrealized_pnl_history[-1] if self.unrealized_pnl_history else 0
+        final_total = self.total_pnl_history[-1] if self.total_pnl_history else 0
         
-        # Legacy properties for backward compatibility
-        self.price_csv_path = price_csv_path
-        self.trades_csv_path = trades_csv_path
+        max_realized = max(self.realized_pnl_history) if self.realized_pnl_history else 0
+        min_realized = min(self.realized_pnl_history) if self.realized_pnl_history else 0
         
-    @property
-    def position(self):
-        return self.positions.get("PRODUCT", 0)
-    
-    @property
-    def pnl(self):
-        return self.pnls.get("PRODUCT", 0)
-    
-    @property
-    def position_tracker(self):
-        return self.position_trackers.get("PRODUCT")
-    
-    @property
-    def orderbook(self):
-        return self.orderbooks.get("PRODUCT")
-    
-    @property
-    def position_history(self):
-        return self.position_histories.get("PRODUCT", [])
-    
-    @property
-    def pnl_history(self):
-        return self.pnl_histories.get("PRODUCT", [])
-    
-    @property
-    def realized_pnl_history(self):
-        return self.realized_pnl_histories.get("PRODUCT", [])
-    
-    @property
-    def unrealized_pnl_history(self):
-        return self.unrealized_pnl_histories.get("PRODUCT", [])
-    
-    @property
-    def total_pnl_history(self):
-        return self.total_pnl_histories.get("PRODUCT", [])
-    
-    @property
-    def mid_price_history(self):
-        return self.mid_price_histories.get("PRODUCT", [])
+        return f"""
+ENHANCED PnL BREAKDOWN:
+├── Realized PnL: {final_realized:.2f} (from closed positions)
+├── Unrealized PnL: {final_unrealized:.2f} (from open positions) 
+├── Total PnL: {final_total:.2f}
+├── Peak Realized PnL: {max_realized:.2f}
+└── Lowest Realized PnL: {min_realized:.2f}
+
+POSITION SUMMARY:
+├── Final Position: {self.position}
+├── Legacy Cash PnL: {self.pnl:.2f}
+└── Enhanced Total PnL: {final_total:.2f}
+"""
