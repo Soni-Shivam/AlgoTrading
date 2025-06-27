@@ -223,10 +223,10 @@ class ModernMultiProductBacktesterGUI:
                                          state='disabled')
         self.interactive_btn.pack(side='left', padx=(0, 10))
 
-        self.summary_btn = ttk.Button(viz_buttons_frame, text="📋 Performance Summary",
-                                     command=self.show_summary, style='Dark.TButton',
-                                     state='disabled')
-        self.summary_btn.pack(side='left', padx=(0, 10))
+        # self.summary_btn = ttk.Button(viz_buttons_frame, text="📋 Performance Summary",
+        #                              command=self.show_summary, style='Dark.TButton',
+        #                              state='disabled')
+        # self.summary_btn.pack(side='left', padx=(0, 10))
 
         self.export_btn = ttk.Button(viz_buttons_frame, text="💾 Export Results",
                                     command=self.export_results, style='Dark.TButton',
@@ -541,7 +541,7 @@ class ModernMultiProductBacktesterGUI:
 
             # Enable visualization buttons
             self.interactive_btn.config(state='normal')
-            self.summary_btn.config(state='normal')
+            # self.summary_btn.config(state='normal')
             self.export_btn.config(state='normal')
 
             # Update quick stats

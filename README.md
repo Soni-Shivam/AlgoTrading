@@ -72,3 +72,4 @@ Will display any errors you might encounter during the backtesting. You may also
 - **Export Results**: Saves a csv file of your PnL.
 
 DM any mentor if you encounter an error, or post in the WA group chat.
+# AlgoTrading

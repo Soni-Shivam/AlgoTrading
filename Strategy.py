@@ -112,7 +112,7 @@ class Trader:
     def __init__(self):
         self.strategies = {
             "SUDOWOODO": SudowoodoStrategy(),
-            "DROWZEE": DrowzeeStrategy(), 
+            "PRODUCT": DrowzeeStrategy(), 
             "ABRA": AbraStrategy()
         }
     
