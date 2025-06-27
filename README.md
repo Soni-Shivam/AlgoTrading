@@ -18,5 +18,8 @@ Check out the [`strategies/`](./strategies) folder for all the custom strategies
 - Bollinger Band Breakout with Z-score Confirmation
 - Hybrid
 ---
+![image](https://github.com/user-attachments/assets/21e79e0c-c385-4e8c-ac4c-390509dbe8dd)
+![abra](https://github.com/user-attachments/assets/bdf66a2e-02f7-4e04-acf5-742163f384a3)
+
 
 
