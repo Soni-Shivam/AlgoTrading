@@ -1,7 +1,7 @@
 # SoC 2025 - Algorithmic Trading
 
 
-This repo is a fork of [SOC 2025: Algorithmic Trading in Python](https://github.com/Dhruv-x7x/AlgoTradingBacktester) — used as a playground witforh multiple trading strategies that (currently) combine ideas like **Z-score mean reversion**, **volatility filtering**, **momentum**, and **market making**.
+This repo is a fork of [SOC 2025: Algorithmic Trading in Python](https://github.com/Dhruv-x7x/AlgoTradingBacktester) used as a playground for multiple trading strategies that (currently) combine ideas like **Z-score mean reversion**, **volatility filtering**, **momentum**, and **market making**.
 
 ---
 ## 📄 Strategy Report
