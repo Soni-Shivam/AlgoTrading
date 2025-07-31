@@ -1,0 +1,79 @@
+class LuxrayStrategy(BaseClass):
+    def __init__(self):
+        super().__init__("PRODUCT", 250)  # Product name and max position
+        self.prices = []
+        self.z_window = 200            # Tuned: smoother Z-score over longer horizon
+        self.vol_window = 70          # Tuned: more stable volatility baseline
+        self.entry_z = 1.6              # Tuned: more selective entry (fits Luxray's fat tails)
+        self.exit_z = 0.3           # Tuned: exits closer to mean
+        self.vol_spike_factor = 1.25    # Tuned: tighter spike detection for Luxray
+        self.base_qty = 20             # Tuned: slightly lower base size to manage risk
+        self.scale_qty = 20           # Tuned: slightly faster scaling with Z strength
+        self.mm_spread = 2     
+
+    def get_orders(self, state, orderbook: OrderBook, position: int):
+        orders = []
+
+        # Skip if no valid book data
+        if not orderbook.buy_orders or not orderbook.sell_orders:
+            return orders
+
+        # Get best bid/ask and mid-price
+        best_bid = max(orderbook.buy_orders.keys())
+        best_ask = min(orderbook.sell_orders.keys())
+        mid_price = (best_bid + best_ask) / 2
+
+        self.prices.append(mid_price)
+
+        # Not enough data → No trades
+        if len(self.prices) < max(self.z_window, self.vol_window):
+            return orders
+
+        # Keep only recent window
+        self.prices = self.prices[-max(self.z_window, self.vol_window):]
+        recent_prices = np.array(self.prices)
+
+        # Calculate Z-score
+        mean_price = np.mean(recent_prices[-self.z_window:])
+        std_price = np.std(recent_prices[-self.z_window:])
+        z_score = (mid_price - mean_price) / std_price if std_price != 0 else 0
+
+        # Volatility spike detection
+        roll_std = np.std(recent_prices[-self.vol_window:])
+        recent_std = np.std(recent_prices[-5:])
+        volatility_spike = recent_std > self.vol_spike_factor * roll_std
+
+        # Dynamic position sizing
+        qty = int(self.base_qty + self.scale_qty * abs(z_score))
+        qty = min(qty, self.max_position)
+
+        traded = False
+
+        # Entry: Long signal (relaxing volatility spike for re-entry)
+        if z_score < -self.entry_z and position < self.max_position:
+            if volatility_spike or position < 0:  # Allow reversal without spike
+                orders.append(Order(self.product_name, best_bid, min(qty, self.max_position - position)))
+                traded = True
+
+        # Entry: Short signal (relaxing volatility spike for re-entry)
+        elif z_score > self.entry_z and position > -self.max_position:
+            if volatility_spike or position > 0:  # Allow reversal without spike
+                orders.append(Order(self.product_name, best_ask - 1, -min(qty, self.max_position + position)))
+                traded = True
+
+        # Exit: Mean reversion
+        elif abs(z_score) < self.exit_z:
+            exit_qty = min(qty, abs(position))
+            if position > 0:
+                orders.append(Order(self.product_name, best_ask, -exit_qty))
+            elif position < 0:
+                orders.append(Order(self.product_name, best_bid-1   , exit_qty))
+            traded = True
+
+        # Passive Market Making if no clear signal
+        if not traded and abs(position) < self.max_position:
+            orders.append(Order(self.product_name, mid_price - self.mm_spread, self.base_qty))
+            orders.append(Order(self.product_name, mid_price + self.mm_spread, -self.base_qty))
+
+        return orders   
+    
