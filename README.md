@@ -6,7 +6,7 @@ This repo is a fork of [SOC 2025: Algorithmic Trading in Python](https://github.
 ---
 ## 📄 Strategy Report
 
-You can read my full strategy report with detailed thought process, implementation, and analysis [here](https://docs.google.com/document/d/1Bie9NN3WVMos6K3Tb12WUAgVfeyeQSj4z2gPOyYuae0/edit?usp=sharing).
+You can read my full strategy report with detailed thought process, implementation, and analysis # [here](https://docs.google.com/document/d/1Bie9NN3WVMos6K3Tb12WUAgVfeyeQSj4z2gPOyYuae0/edit?usp=sharing).
 
 ![image](https://github.com/user-attachments/assets/ead28d4d-ee82-43b6-bd44-55e3c2e5fee1)
 
